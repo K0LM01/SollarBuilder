@@ -41,3 +41,15 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Zabrání nahrání vašich tajných klíčů ke Convexu!
+.env
+.env.local
+
+# Zabrání nahrání tisíců stažených balíčků
+node_modules/
+/ios/Pods/
+
+# Zabrání nahrání vygenerovaných buildů aplikace
+/android/app/build/
+/ios/build/
