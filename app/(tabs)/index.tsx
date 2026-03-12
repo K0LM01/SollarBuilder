@@ -1,22 +1,16 @@
-import { StyleSheet, Text, View } from "react-native";
+import { createHomeStyles } from "@/assets/images/home.styles";
+import useTheme from "@/hooks/useTheme";
+import { LinearGradient } from "expo-linear-gradient";
 
 export default function Index() {
+  const { colors } = useTheme();
+
+  const homeStyles = createHomeStyles(colors);
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.content}>Dominik je nejlepsi</Text>
-    </View>
+    <LinearGradient
+      colors={colors.gradients.background}
+      style={homeStyles.container}
+    ></LinearGradient>
   );
 }
-
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-  },
-  content: {
-    fontSize: 24,
-  },
-});
