@@ -2,9 +2,16 @@ import useTheme from "@/hooks/useTheme";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
-import { useEffect, useRef, useState } from "react";
+import {
+  forwardRef,
+  useEffect,
+  useImperativeHandle,
+  useRef,
+  useState,
+} from "react";
 import {
   Animated,
+  Dimensions,
   Modal,
   PanResponder,
   Pressable,
@@ -15,6 +22,9 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+
+import { api } from "@/convex/_generated/api";
+import { useMutation, useQuery } from "convex/react";
 
 // ==========================================
 // 0. MATEMATIKA: Algoritmus pro panely
@@ -29,10 +39,8 @@ const calculatePanelLayout = (
 ) => {
   const layouts = [];
   let placedCount = 0;
-
   const mainPW = preferredOrientation === "portrait" ? panelW : panelH;
   const mainPH = preferredOrientation === "portrait" ? panelH : panelW;
-
   const cols = Math.floor(roofW / mainPW);
   const rows = Math.floor(roofH / mainPH);
 
@@ -53,7 +61,6 @@ const calculatePanelLayout = (
   if (placedCount < count) {
     const altPW = mainPH;
     const altPH = mainPW;
-
     const usedWidth = cols * mainPW;
     const remainingWidth = roofW - usedWidth;
     if (remainingWidth >= altPW) {
@@ -73,7 +80,6 @@ const calculatePanelLayout = (
         }
       }
     }
-
     const usedHeight = rows * mainPH;
     const remainingHeight = roofH - usedHeight;
     if (remainingHeight >= altPH) {
@@ -103,9 +109,8 @@ const calculatePanelLayout = (
 const GridBackground = ({ color }: { color: string }) => {
   const lines = Array.from({ length: 100 });
   const gridSize = 30;
-
   return (
-    <View style={[StyleSheet.absoluteFill, { overflow: "hidden" }]}>
+    <View style={[StyleSheet.absoluteFill, { overflow: "hidden", zIndex: -1 }]}>
       {lines.map((_, i) => (
         <View
           key={`h-${i}`}
@@ -134,116 +139,285 @@ const GridBackground = ({ color }: { color: string }) => {
   );
 };
 // ==========================================
-// 2. DRAGGABLE KOMPONENTA (BLOK PANELŮ S HRANICEMI)
+// 2. DRAGGABLE KOMPONENTA (S PERFEKTNÍ MATEMATIKOU A PŘISÁVÁNÍM)
 // ==========================================
-const DraggablePanelGroup = ({
-  layout,
-  scale,
-  roofWidthPx,
-  roofHeightPx,
-}: {
+type DraggableProps = {
   layout: any[];
   scale: number;
   roofWidthPx: number;
   roofHeightPx: number;
-}) => {
-  // Samotná hodnota, kterou taháme prstem
-  const pan = useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  realRoofWidth: number;
+  realRoofHeight: number;
+  initialPosition: { x: number; y: number };
+  onDragStart: () => void;
+  onDragMove: (x: number, y: number) => void;
+  onDragEnd: (x: number, y: number) => void;
+  onPositionChange: (x: number, y: number) => void;
+};
+export interface DraggablePanelGroupRef {
+  center: () => void;
+}
 
-  // Zde si PŘESNĚ pamatujeme, kde se zrovna blok nachází (bez ohledu na animace)
-  const currentPos = useRef({ x: 0, y: 0 });
+const DraggablePanelGroup = forwardRef<DraggablePanelGroupRef, DraggableProps>(
+  (
+    {
+      layout,
+      scale,
+      roofWidthPx,
+      roofHeightPx,
+      realRoofWidth,
+      realRoofHeight,
+      initialPosition,
+      onDragStart,
+      onDragMove,
+      onDragEnd,
+      onPositionChange,
+    },
+    ref,
+  ) => {
+    const boundingWidth = Math.max(...layout.map((p) => p.x + p.width)) * scale;
+    const boundingHeight =
+      Math.max(...layout.map((p) => p.y + p.height)) * scale;
 
-  // Vypočítáme fyzickou velikost celého vyskládaného bloku
-  const boundingWidth = Math.max(...layout.map((p) => p.x + p.width)) * scale;
-  const boundingHeight = Math.max(...layout.map((p) => p.y + p.height)) * scale;
+    const maxAllowedX = Math.max(0, roofWidthPx - boundingWidth - 6);
+    const maxAllowedY = Math.max(0, roofHeightPx - boundingHeight - 6);
 
-  // Spočítáme maximální povolené hranice pro pohyb.
-  // Občas uživatel přidá panely, které se nevejdou ani na střechu
-  // V tom případě maxBounds nepustíme pod 0.
-  // Přidáme ruční odečet 6px kvůli tloušťce čáry rámečku (borderWidth 3 * 2 strany)
-  const maxAllowedX = Math.max(0, roofWidthPx - boundingWidth - 6);
-  const maxAllowedY = Math.max(0, roofHeightPx - boundingHeight - 6);
+    const startX = initialPosition
+      ? Math.min(initialPosition.x, maxAllowedX)
+      : 0;
+    const startY = initialPosition
+      ? Math.min(initialPosition.y, maxAllowedY)
+      : 0;
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
+    const pan = useRef(new Animated.ValueXY({ x: startX, y: startY })).current;
+    const currentPos = useRef({ x: startX, y: startY });
+    const [isDraggingLocal, setIsDraggingLocal] = useState(false);
 
-      onPanResponderGrant: () => {
-        // Zafixujeme stávající pozici bloku
-        pan.setOffset({ x: currentPos.current.x, y: currentPos.current.y });
-        pan.setValue({ x: 0, y: 0 });
-      },
+    // Čistá matematika (maximální pohyb v cm)
+    const realBoundW = Math.round(boundingWidth / scale);
+    const realBoundH = Math.round(boundingHeight / scale);
+    const maxMoveCmX = Math.max(0, realRoofWidth - realBoundW);
+    const maxMoveCmY = Math.max(0, realRoofHeight - realBoundH);
 
-      onPanResponderMove: (e, gestureState) => {
-        // Cílová X pozice na plátně (kde chci být = výchozí pozice + pohyb prstu)
-        let newX = currentPos.current.x + gestureState.dx;
-        // Cílová Y pozice na plátně
-        let newY = currentPos.current.y + gestureState.dy;
+    const callbacks = useRef({
+      onDragEnd,
+      onPositionChange,
+      onDragStart,
+      onDragMove,
+    });
+    useEffect(() => {
+      callbacks.current = {
+        onDragEnd,
+        onPositionChange,
+        onDragStart,
+        onDragMove,
+      };
+    }, [onDragEnd, onPositionChange, onDragStart, onDragMove]);
 
-        // OMEZÍME ZLEVA A SHORA (nesmí pod nulu)
-        if (newX < 0) newX = 0;
-        if (newY < 0) newY = 0;
+    const [distances, setDistances] = useState({
+      left: 0,
+      top: 0,
+      right: 0,
+      bottom: 0,
+    });
 
-        // OMEZÍME ZPRAVA A ZDOLA (nesmí přesáhnout okraj střechy minus velikost panelů)
-        if (newX > maxAllowedX) newX = maxAllowedX;
-        if (newY > maxAllowedY) newY = maxAllowedY;
+    useImperativeHandle(ref, () => ({
+      center: () => {
+        // Centrování s přihlédnutím k 5cm mřížce
+        let targetCmX = Math.round(maxMoveCmX / 2 / 5) * 5;
+        let targetCmY = Math.round(maxMoveCmY / 2 / 5) * 5;
 
-        // Protože Pan.setValue se počítá OD AKTUALNÍHO OFFSETU,
-        // musíme od cílové chráněné pozice zase ten offset odečíst
-        pan.setValue({
-          x: newX - currentPos.current.x,
-          y: newY - currentPos.current.y,
+        let targetX =
+          maxMoveCmX > 0 ? (targetCmX / maxMoveCmX) * maxAllowedX : 0;
+        let targetY =
+          maxMoveCmY > 0 ? (targetCmY / maxMoveCmY) * maxAllowedY : 0;
+
+        setIsDraggingLocal(true);
+        Animated.spring(pan, {
+          toValue: { x: targetX, y: targetY },
+          useNativeDriver: false,
+          friction: 6,
+        }).start(() => {
+          currentPos.current = { x: targetX, y: targetY };
+          setTimeout(() => setIsDraggingLocal(false), 600);
+          callbacks.current.onPositionChange(targetX, targetY);
         });
       },
+    }));
 
-      onPanResponderRelease: (e, gestureState) => {
-        // Po puštění si do paměti uložíme FINÁLNÍ pozici,
-        // ať při dalším chycení neuskočí
-        pan.flattenOffset();
+    // Kóty už se počítají procentuálně = absolutní přesnost na okrajích (0 cm!)
+    useEffect(() => {
+      const listenerId = pan.addListener((value) => {
+        let percentX =
+          maxAllowedX > 0 ? Math.max(0, Math.min(1, value.x / maxAllowedX)) : 0;
+        let percentY =
+          maxAllowedY > 0 ? Math.max(0, Math.min(1, value.y / maxAllowedY)) : 0;
 
-        // Z animated nodu vytáhneme finální reálné souřadnice
-        currentPos.current.x = (pan.x as any)._value;
-        currentPos.current.y = (pan.y as any)._value;
-      },
-    }),
-  ).current;
+        let leftCm = Math.round(percentX * maxMoveCmX);
+        let topCm = Math.round(percentY * maxMoveCmY);
 
-  return (
-    <Animated.View
-      {...panResponder.panHandlers}
-      style={{
-        position: "absolute",
-        left: 0,
-        top: 0,
-        width: boundingWidth,
-        height: boundingHeight,
-        transform: [{ translateX: pan.x }, { translateY: pan.y }],
-        // Pomáhá se zvedáním dotyků
-        backgroundColor: "rgba(59, 130, 246, 0.15)",
-        // !!! Přidali jsme overflow, aby žádný kousek nevykukoval !!!
-        overflow: "hidden",
-      }}
-    >
-      {layout.map((panel, index) => (
-        <View
-          key={index}
-          style={{
-            position: "absolute",
-            left: panel.x * scale,
-            top: panel.y * scale,
-            width: panel.width * scale,
-            height: panel.height * scale,
-            backgroundColor: "#1e3a8a",
-            borderWidth: 1,
-            borderColor: "#60a5fa",
-            borderRadius: 2, // Můžeme nechat jemné zakulacení
-          }}
-        />
-      ))}
-    </Animated.View>
-  );
-};
+        setDistances({
+          left: leftCm,
+          top: topCm,
+          right: Math.max(0, maxMoveCmX - leftCm),
+          bottom: Math.max(0, maxMoveCmY - topCm),
+        });
+      });
+      return () => pan.removeListener(listenerId);
+    }, [pan, maxAllowedX, maxAllowedY, maxMoveCmX, maxMoveCmY]);
+
+    const panResponder = useRef(
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: () => {
+          setIsDraggingLocal(true);
+          pan.setOffset({ x: currentPos.current.x, y: currentPos.current.y });
+          pan.setValue({ x: 0, y: 0 });
+          callbacks.current.onDragStart();
+        },
+        onPanResponderMove: (e, gestureState) => {
+          let rawX = currentPos.current.x + gestureState.dx;
+          let rawY = currentPos.current.y + gestureState.dy;
+
+          // Krok 1: Kde jsme procentuálně na obrazovce?
+          let percentX = maxAllowedX > 0 ? rawX / maxAllowedX : 0;
+          let percentY = maxAllowedY > 0 ? rawY / maxAllowedY : 0;
+
+          // Krok 2: Jaká je to hodnota v reálných centimetrech?
+          let rawCmX = percentX * maxMoveCmX;
+          let rawCmY = percentY * maxMoveCmY;
+
+          // Krok 3: Přisajeme k nejbližším 5 cm
+          let snappedCmX = Math.round(rawCmX / 5) * 5;
+          let snappedCmY = Math.round(rawCmY / 5) * 5;
+
+          // Krok 4: Zabráníme přejetí okrajů
+          if (snappedCmX < 0) snappedCmX = 0;
+          if (snappedCmY < 0) snappedCmY = 0;
+          if (snappedCmX > maxMoveCmX) snappedCmX = maxMoveCmX;
+          if (snappedCmY > maxMoveCmY) snappedCmY = maxMoveCmY;
+
+          // Krok 5: Převedeme cm zpět na fyzické pixely pro animaci
+          let finalX =
+            maxMoveCmX > 0 ? (snappedCmX / maxMoveCmX) * maxAllowedX : 0;
+          let finalY =
+            maxMoveCmY > 0 ? (snappedCmY / maxMoveCmY) * maxAllowedY : 0;
+
+          pan.setValue({
+            x: finalX - currentPos.current.x,
+            y: finalY - currentPos.current.y,
+          });
+          callbacks.current.onDragMove(gestureState.moveX, gestureState.moveY);
+        },
+        onPanResponderRelease: () => {
+          setIsDraggingLocal(false);
+          pan.flattenOffset();
+          const finalX = (pan.x as any)._value;
+          const finalY = (pan.y as any)._value;
+          currentPos.current.x = finalX;
+          currentPos.current.y = finalY;
+          callbacks.current.onDragEnd(finalX, finalY);
+        },
+        onPanResponderTerminate: () => setIsDraggingLocal(false),
+      }),
+    ).current;
+
+    return (
+      <Animated.View
+        {...panResponder.panHandlers}
+        style={{
+          position: "absolute",
+          left: 0,
+          top: 0,
+          width: boundingWidth,
+          height: boundingHeight,
+          transform: [{ translateX: pan.x }, { translateY: pan.y }],
+          backgroundColor: "rgba(59, 130, 246, 0.15)",
+        }}
+      >
+        {layout.map((panel, index) => (
+          <View
+            key={index}
+            style={{
+              position: "absolute",
+              left: panel.x * scale,
+              top: panel.y * scale,
+              width: panel.width * scale,
+              height: panel.height * scale,
+              backgroundColor: "#1e3a8a",
+              borderWidth: 1,
+              borderColor: "#60a5fa",
+              borderRadius: 2,
+            }}
+          />
+        ))}
+        {isDraggingLocal && (
+          <>
+            <View
+              style={{
+                position: "absolute",
+                top: -32,
+                width: "100%",
+                alignItems: "center",
+              }}
+            >
+              <View style={styles.dimensionBadge}>
+                <Text style={styles.dimensionBadgeText}>
+                  {distances.top} cm
+                </Text>
+              </View>
+            </View>
+            <View
+              style={{
+                position: "absolute",
+                bottom: -32,
+                width: "100%",
+                alignItems: "center",
+              }}
+            >
+              <View style={styles.dimensionBadge}>
+                <Text style={styles.dimensionBadgeText}>
+                  {distances.bottom} cm
+                </Text>
+              </View>
+            </View>
+            <View
+              style={{
+                position: "absolute",
+                left: -55,
+                top: 0,
+                height: "100%",
+                justifyContent: "center",
+              }}
+            >
+              <View style={styles.dimensionBadge}>
+                <Text style={styles.dimensionBadgeText}>
+                  {distances.left} cm
+                </Text>
+              </View>
+            </View>
+            <View
+              style={{
+                position: "absolute",
+                right: -55,
+                top: 0,
+                height: "100%",
+                justifyContent: "center",
+              }}
+            >
+              <View style={styles.dimensionBadge}>
+                <Text style={styles.dimensionBadgeText}>
+                  {distances.right} cm
+                </Text>
+              </View>
+            </View>
+          </>
+        )}
+      </Animated.View>
+    );
+  },
+);
 
 // ==========================================
 // 3. VYSKAKOVACÍ MENU A FORMULÁŘE
@@ -255,7 +429,6 @@ const CustomMenu = ({ visible, onClose, onSelect, colors }: any) => {
     { id: 3, title: "🏠 Skylight" },
     { id: 4, title: "⚡ Lightning conductor" },
   ];
-
   return (
     <Modal
       visible={visible}
@@ -334,7 +507,6 @@ const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
   const [panelWidth, setPanelWidth] = useState("113");
   const [panelHeight, setPanelHeight] = useState("172");
   const [orientation, setOrientation] = useState("portrait");
-
   return (
     <Modal
       visible={visible}
@@ -357,7 +529,6 @@ const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
           <Text style={[styles.menuTitle, { color: colors.text }]}>
             Panel Settings
           </Text>
-
           <TextInput
             style={[
               styles.input,
@@ -367,8 +538,7 @@ const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
                 color: colors.text,
               },
             ]}
-            placeholder="Count (e.g. 10)"
-            placeholderTextColor={colors.textMuted}
+            placeholder="Count"
             keyboardType="numeric"
             value={count}
             onChangeText={setCount}
@@ -384,8 +554,7 @@ const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
                   color: colors.text,
                 },
               ]}
-              placeholder="Width (cm)"
-              placeholderTextColor={colors.textMuted}
+              placeholder="Width"
               keyboardType="numeric"
               value={panelWidth}
               onChangeText={setPanelWidth}
@@ -400,8 +569,7 @@ const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
                   color: colors.text,
                 },
               ]}
-              placeholder="Height (cm)"
-              placeholderTextColor={colors.textMuted}
+              placeholder="Height"
               keyboardType="numeric"
               value={panelHeight}
               onChangeText={setPanelHeight}
@@ -518,16 +686,28 @@ export default function RoofPlanScreen() {
   const { colors } = useTheme();
   const router = useRouter();
 
-  const { name, width, height } = useLocalSearchParams();
+  const { id, name, width, height } = useLocalSearchParams();
+  const roofId = (Array.isArray(id) ? id[0] : id) as any;
   const realWidth = Number(width) || 1000;
   const realHeight = Number(height) || 1000;
+
+  const roofs = useQuery(api.solars.getSolars);
+  const updatePanelsMutation = useMutation(api.solars.updatePanels);
 
   const [boardSize, setBoardSize] = useState({ width: 0, height: 0 });
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isPanelFormVisible, setIsPanelFormVisible] = useState(false);
+  const [isTrashActive, setIsTrashActive] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
 
-  // Zde ukládáme vykreslené panely!
+  const [isLoaded, setIsLoaded] = useState(false);
   const [panelGroup, setPanelGroup] = useState<any[] | null>(null);
+  const [panelConfig, setPanelConfig] = useState<any>(null);
+  const [savedPosition, setSavedPosition] = useState({ x: 0, y: 0 });
+
+  const trashActiveRef = useRef(false);
+  const draggableGroupRef = useRef<DraggablePanelGroupRef>(null);
+  const statsOpacity = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.LANDSCAPE);
@@ -538,10 +718,48 @@ export default function RoofPlanScreen() {
     };
   }, []);
 
-  const handleSelectItem = (item: any) => {
-    if (item.title.includes("Solar panels")) {
-      setIsPanelFormVisible(true);
+  useEffect(() => {
+    if (roofs && !isLoaded && roofId) {
+      const currentRoof = roofs.find((r: any) => r._id === roofId);
+      if (currentRoof && currentRoof.panelLayout) {
+        setPanelConfig(currentRoof.panelConfig);
+        setPanelGroup(currentRoof.panelLayout);
+        setSavedPosition(currentRoof.savedPosition || { x: 0, y: 0 });
+      }
+      setIsLoaded(true);
+    } else if (roofs && !roofId) {
+      setIsLoaded(true);
     }
+  }, [roofs, isLoaded, roofId]);
+
+  const savePlanToDatabase = (
+    config: any,
+    layout: any,
+    position: { x: number; y: number },
+  ) => {
+    if (!roofId) return;
+    updatePanelsMutation({
+      roofId: roofId,
+      panelConfig: config || undefined,
+      panelLayout: layout || undefined,
+      savedPosition: position,
+    }).catch((err) => console.error("DB CHYBA:", err));
+  };
+
+  const triggerStatsFadeOut = () => {
+    statsOpacity.setValue(1);
+    Animated.sequence([
+      Animated.delay(4000),
+      Animated.timing(statsOpacity, {
+        toValue: 0,
+        duration: 500,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
+
+  const handleSelectItem = (item: any) => {
+    if (item.title.includes("Solar panels")) setIsPanelFormVisible(true);
   };
 
   const handleGeneratePanels = (panelData: any) => {
@@ -553,25 +771,43 @@ export default function RoofPlanScreen() {
       panelData.count,
       panelData.orientation,
     );
+    setPanelConfig(panelData);
     setPanelGroup(layout);
+    setSavedPosition({ x: 0, y: 0 });
+
+    savePlanToDatabase(panelData, layout, { x: 0, y: 0 });
+    triggerStatsFadeOut();
   };
+
+  if (!isLoaded) {
+    return (
+      <LinearGradient
+        colors={colors.gradients.background}
+        style={[
+          styles.container,
+          { justifyContent: "center", alignItems: "center" },
+        ]}
+      >
+        <Text style={{ color: colors.text, fontWeight: "bold" }}>
+          Načítám z databáze...
+        </Text>
+      </LinearGradient>
+    );
+  }
 
   let pixelWidth = 0;
   let pixelHeight = 0;
   let scale = 1;
-
   if (boardSize.width > 0 && boardSize.height > 0) {
     const maxDrawWidth = boardSize.width - 50;
-    const maxDrawHeight = boardSize.height - 50;
+    const maxDrawHeight = boardSize.height - 70;
     const scaleW = maxDrawWidth / realWidth;
     const scaleH = maxDrawHeight / realHeight;
     scale = Math.min(scaleW, scaleH);
-
     if (realWidth > realHeight) {
       scale = (boardSize.width - 20) / realWidth;
-      if (realHeight * scale > boardSize.height - 40) {
-        scale = (boardSize.height - 40) / realHeight;
-      }
+      if (realHeight * scale > boardSize.height - 70)
+        scale = (boardSize.height - 70) / realHeight;
     }
     pixelWidth = realWidth * scale;
     pixelHeight = realHeight * scale;
@@ -582,7 +818,7 @@ export default function RoofPlanScreen() {
       colors={colors.gradients.background}
       style={styles.container}
     >
-      <SafeAreaView style={styles.safeArea}>
+      <SafeAreaView style={{ flex: 1 }}>
         <View
           style={[
             styles.header,
@@ -608,19 +844,38 @@ export default function RoofPlanScreen() {
               Blueprint: {name}
             </Text>
           </View>
-          <Pressable
-            onPress={() => setIsMenuVisible(true)}
-            style={{
-              backgroundColor: colors.primary,
-              paddingHorizontal: 16,
-              paddingVertical: 10,
-              borderRadius: 12,
-            }}
-          >
-            <Text style={{ color: "#fff", fontWeight: "bold" }}>
-              + Add object
-            </Text>
-          </Pressable>
+          <View style={{ flexDirection: "row", gap: 12 }}>
+            {panelGroup && panelGroup.length > 0 && (
+              <Pressable
+                onPress={() => draggableGroupRef.current?.center()}
+                style={{
+                  backgroundColor: colors.surface,
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 12,
+                  borderWidth: 1,
+                  borderColor: colors.headerBorderBottom,
+                }}
+              >
+                <Text style={{ color: colors.text, fontWeight: "bold" }}>
+                  ⌖ Center
+                </Text>
+              </Pressable>
+            )}
+            <Pressable
+              onPress={() => setIsMenuVisible(true)}
+              style={{
+                backgroundColor: colors.primary,
+                paddingHorizontal: 16,
+                paddingVertical: 10,
+                borderRadius: 12,
+              }}
+            >
+              <Text style={{ color: "#fff", fontWeight: "bold" }}>
+                + Add object
+              </Text>
+            </Pressable>
+          </View>
         </View>
 
         <View style={styles.planContainer}>
@@ -632,13 +887,14 @@ export default function RoofPlanScreen() {
                 borderColor: colors.headerBorderBottom,
               },
             ]}
-            onLayout={(event) => {
-              const { width, height } = event.nativeEvent.layout;
-              setBoardSize({ width, height });
-            }}
+            onLayout={(event) =>
+              setBoardSize({
+                width: event.nativeEvent.layout.width,
+                height: event.nativeEvent.layout.height,
+              })
+            }
           >
             <GridBackground color={colors.textMuted + "20"} />
-
             {boardSize.width > 0 && (
               <View style={styles.centerWrapper}>
                 <View
@@ -670,44 +926,126 @@ export default function RoofPlanScreen() {
                   >
                     {realWidth}cm
                   </Text>
-                  {/* ZDE VYKRESLUJEME BLOK PANELŮ */}
+
                   {panelGroup && panelGroup.length > 0 && (
                     <DraggablePanelGroup
+                      ref={draggableGroupRef}
+                      key={`panels-${panelGroup.length}-${savedPosition.x}-${savedPosition.y}`}
                       layout={panelGroup}
                       scale={scale}
                       roofWidthPx={pixelWidth}
                       roofHeightPx={pixelHeight}
+                      realRoofWidth={realWidth}
+                      realRoofHeight={realHeight}
+                      initialPosition={savedPosition}
+                      onDragStart={() => setIsDragging(true)}
+                      onDragMove={(pageX, pageY) => {
+                        const screenHeight = Dimensions.get("window").height;
+                        const screenWidth = Dimensions.get("window").width;
+                        if (
+                          pageY > screenHeight - 150 &&
+                          pageX > screenWidth - 150
+                        ) {
+                          setIsTrashActive(true);
+                          trashActiveRef.current = true;
+                        } else {
+                          setIsTrashActive(false);
+                          trashActiveRef.current = false;
+                        }
+                      }}
+                      onDragEnd={(finalX, finalY) => {
+                        setIsDragging(false);
+                        if (trashActiveRef.current === true) {
+                          setPanelGroup(null);
+                          setPanelConfig(null);
+                          setIsTrashActive(false);
+                          trashActiveRef.current = false;
+                          savePlanToDatabase(null, null, { x: 0, y: 0 });
+                        } else {
+                          triggerStatsFadeOut();
+                          setSavedPosition({ x: finalX, y: finalY });
+                          savePlanToDatabase(panelConfig, panelGroup, {
+                            x: finalX,
+                            y: finalY,
+                          });
+                        }
+                      }}
+                      onPositionChange={(targetX, targetY) => {
+                        setSavedPosition({ x: targetX, y: targetY });
+                        savePlanToDatabase(panelConfig, panelGroup, {
+                          x: targetX,
+                          y: targetY,
+                        });
+                      }}
                     />
                   )}
                 </View>
               </View>
             )}
+            {panelGroup && panelConfig && (
+              <Animated.View
+                style={[
+                  styles.statsBadge,
+                  {
+                    backgroundColor: colors.surface,
+                    borderColor: colors.headerBorderBottom,
+                    opacity: statsOpacity,
+                  },
+                ]}
+              >
+                <Text
+                  style={{
+                    color: colors.text,
+                    fontWeight: "600",
+                    fontSize: 13,
+                  }}
+                >
+                  ☀️ {panelGroup.length} / {panelConfig.count} panels on roof
+                </Text>
+              </Animated.View>
+            )}
           </View>
         </View>
-
-        <CustomMenu
-          visible={isMenuVisible}
-          onClose={() => setIsMenuVisible(false)}
-          onSelect={handleSelectItem}
-          colors={colors}
-        />
-        <SolarPanelFormModal
-          visible={isPanelFormVisible}
-          onClose={() => setIsPanelFormVisible(false)}
-          onSave={handleGeneratePanels}
-          colors={colors}
-        />
       </SafeAreaView>
+      {isDragging && (
+        <View
+          style={{
+            position: "absolute",
+            bottom: 40,
+            right: 40,
+            width: isTrashActive ? 80 : 60,
+            height: isTrashActive ? 80 : 60,
+            borderRadius: 40,
+            backgroundColor: isTrashActive ? "#ef4444" : "rgba(0,0,0,0.8)",
+            borderWidth: 3,
+            borderColor: isTrashActive ? "#fff" : "#ff4444",
+            justifyContent: "center",
+            alignItems: "center",
+            zIndex: 99999,
+            elevation: 100,
+          }}
+        >
+          <Text style={{ fontSize: isTrashActive ? 32 : 24 }}>🗑️</Text>
+        </View>
+      )}
+      <CustomMenu
+        visible={isMenuVisible}
+        onClose={() => setIsMenuVisible(false)}
+        onSelect={handleSelectItem}
+        colors={colors}
+      />
+      <SolarPanelFormModal
+        visible={isPanelFormVisible}
+        onClose={() => setIsPanelFormVisible(false)}
+        onSave={handleGeneratePanels}
+        colors={colors}
+      />
     </LinearGradient>
   );
 }
 
-// ==========================================
-// 5. STYLY
-// ==========================================
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  safeArea: { flex: 1 },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -723,6 +1061,7 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 2,
     overflow: "hidden",
+    position: "relative",
   },
   centerWrapper: {
     ...StyleSheet.absoluteFillObject,
@@ -797,4 +1136,32 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  statsBadge: {
+    position: "absolute",
+    bottom: 16,
+    left: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 12,
+    borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  dimensionBadge: {
+    backgroundColor: "#f59e0b",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.3,
+    shadowRadius: 3,
+    elevation: 4,
+  },
+  dimensionBadgeText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
 });

@@ -25,8 +25,8 @@ export default function Index() {
     if (!name || !roofWidth || !roofHeight) return;
 
     try {
-      // 2. Uložíme data do databáze Convex
-      await addRoof({
+      // 2. Uložíme data do databáze Convex a získáme vygenerované ID
+      const newRoofId = await addRoof({
         name,
         roofWidth: Number(roofWidth),
         roofHeight: Number(roofHeight),
@@ -36,7 +36,8 @@ export default function Index() {
       router.push({
         pathname: "/roof-plan",
         params: {
-          name,
+          id: newRoofId,
+          name: name,
           width: roofWidth,
           height: roofHeight,
         },

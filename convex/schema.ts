@@ -7,12 +7,21 @@ export default defineSchema({
     roofWidth: v.number(),
     roofHeight: v.number(),
 
+    // NOVÉ: Sloupečky pro uložení solárních panelů a jejich pozice
+    panelConfig: v.optional(v.any()),
+    panelLayout: v.optional(v.any()),
+    savedPosition: v.optional(
+      v.object({
+        x: v.number(),
+        y: v.number(),
+      }),
+    ),
+
     obstacles: v.array(
       v.union(
         // TYP 1: Střešní okno
         v.object({
           type: v.literal("roof_window"),
-          // PositionX přesunuto sem:
           positionX: v.union(
             v.object({ measuredFrom: v.literal("left"), distance: v.number() }),
             v.object({
@@ -20,7 +29,6 @@ export default defineSchema({
               distance: v.number(),
             }),
           ),
-          // PositionY přesunuto sem:
           positionY: v.union(
             v.object({ measuredFrom: v.literal("top"), distance: v.number() }),
             v.object({

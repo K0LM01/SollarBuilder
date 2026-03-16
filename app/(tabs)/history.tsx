@@ -32,6 +32,7 @@ export default function HistoryScreen() {
       router.push({
         pathname: "/roof-plan",
         params: {
+          id: item._id,
           name: item.name,
           width: item.roofWidth,
           height: item.roofHeight,
@@ -81,8 +82,6 @@ export default function HistoryScreen() {
       </View>
     );
   };
-
-  // ... zbytek kódu s FlatListem zůstává stejný
 
   return (
     <LinearGradient

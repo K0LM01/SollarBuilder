@@ -17,7 +17,7 @@ export const addRoof = mutation({
     roofHeight: v.number(),
   },
   handler: async (ctx, args) => {
-    //nova strecha bez problemovych bodu
+    //nova strecha bez problemovych bodu a panelu
     return await ctx.db.insert("roofs", {
       name: args.name,
       roofWidth: args.roofWidth,
@@ -32,7 +32,6 @@ export const addObstacle = mutation({
   args: {
     //upravovana strecha
     roofId: v.id("roofs"),
-
     //prebirani v frontendu
     newObstacle: v.any(),
   },
@@ -122,8 +121,6 @@ export const deleteAllRoofs = mutation({
     const allRoofs = await ctx.db.query("roofs").collect();
 
     // 2. Projdeme je a všechny je paralelně smažeme
-    // Používáme Promise.all pro zrychlení, protože nemusíme čekat
-    // na smazání jedné, abychom mohli začít mazat druhou
     await Promise.all(allRoofs.map((roof) => ctx.db.delete(roof._id)));
   },
 });
@@ -143,6 +140,25 @@ export const removeObstacle = mutation({
 
     await ctx.db.patch(args.roofId, {
       obstacles: newObstacles,
+    });
+  },
+});
+
+// ==========================================
+// NOVÉ: ULOŽENÍ STAVU PANELŮ NA STŘEŠE
+// ==========================================
+export const updatePanels = mutation({
+  args: {
+    roofId: v.id("roofs"),
+    panelConfig: v.optional(v.any()),
+    panelLayout: v.optional(v.any()),
+    savedPosition: v.optional(v.object({ x: v.number(), y: v.number() })),
+  },
+  handler: async (ctx, args) => {
+    await ctx.db.patch(args.roofId, {
+      panelConfig: args.panelConfig,
+      panelLayout: args.panelLayout,
+      savedPosition: args.savedPosition,
     });
   },
 });
