@@ -37,11 +37,20 @@ const TabsLayout = () => {
       }}
     >
       <Tabs.Screen
+        name="history"
+        options={{
+          title: "History",
+          tabBarIcon: ({ color, size }) => (
+            <AntDesign name="history" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
         name="index"
         options={{
           title: "SolarPlanner",
           tabBarIcon: ({ color, size }) => (
-            <AntDesign name="home" size={size} color={color} />
+            <AntDesign name="plus-circle" size={size} color={color} />
           ),
         }}
       />
@@ -51,15 +60,6 @@ const TabsLayout = () => {
           title: "Settings",
           tabBarIcon: ({ color, size }) => (
             <Feather name="settings" size={size} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="history"
-        options={{
-          title: "History",
-          tabBarIcon: ({ color, size }) => (
-            <AntDesign name="history" size={size} color={color} />
           ),
         }}
       />

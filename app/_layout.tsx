@@ -1,4 +1,5 @@
 import { ThemeProvider } from "@/hooks/useTheme";
+import { ActionSheetProvider } from "@expo/react-native-action-sheet";
 import { ConvexProvider, ConvexReactClient } from "convex/react";
 import { Stack } from "expo-router";
 
@@ -11,9 +12,11 @@ export default function RootLayout() {
   return (
     <ConvexProvider client={convex}>
       <ThemeProvider>
-        <Stack screenOptions={{ headerShown: false }}>
-          <Stack.Screen name="(tabs)" options={{ title: "Home" }} />
-        </Stack>
+        <ActionSheetProvider>
+          <Stack screenOptions={{ headerShown: false }}>
+            <Stack.Screen name="(tabs)" options={{ title: "Home" }} />
+          </Stack>
+        </ActionSheetProvider>
       </ThemeProvider>
     </ConvexProvider>
   );

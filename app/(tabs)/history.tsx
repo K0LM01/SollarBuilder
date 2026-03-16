@@ -3,33 +3,43 @@ import EmptyState from "@/components/EmptyState";
 import HistoryHeader from "@/components/historyHeader";
 import LoadingSpinner from "@/components/LoadingSpinner";
 import { api } from "@/convex/_generated/api";
-import { Doc, Id } from "@/convex/_generated/dataModel";
+import { Doc } from "@/convex/_generated/dataModel";
 import useTheme from "@/hooks/useTheme";
 import { useQuery } from "convex/react";
 import { LinearGradient } from "expo-linear-gradient";
+import { useRouter } from "expo-router"; // PŘIDÁNO
 import { Alert, FlatList, Text, TouchableOpacity, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
 type Roof = Doc<"roofs">;
-
 export default function HistoryScreen() {
   const { colors } = useTheme();
-
   const historyStyles = createHistoryStyles(colors);
-  // Načtení dat z Convexu
-  const roofs = useQuery(api.solars.getSolars);
 
+  const router = useRouter(); // PŘIDÁNO - inicializace routeru
+
+  const roofs = useQuery(api.solars.getSolars);
   const isLoading = roofs === undefined;
 
-  // Zobrazení spinneru během načítání
   if (isLoading) return <LoadingSpinner />;
 
-  const handleToggleRoof = async (id: Id<"roofs">) => {
+  // ÚPRAVA: Přidáme parametr item typu Roof místo pouhého id
+  const handleToggleRoof = (item: Roof) => {
     try {
-      console.log("Otevrena strecha");
+      console.log("Otevírám plánek pro:", item.name);
+
+      // Přesměrování na plánek se stejnými daty jako z Indexu
+      router.push({
+        pathname: "/roof-plan",
+        params: {
+          name: item.name,
+          width: item.roofWidth,
+          height: item.roofHeight,
+        },
+      });
     } catch (error) {
       console.log("Error, something went wrong", error);
-      Alert.alert("Error", "Failed to open roof");
+      Alert.alert("Error", "Failed to open roof plan");
     }
   };
 
@@ -38,7 +48,8 @@ export default function HistoryScreen() {
       <View style={historyStyles.roofItemWrapper}>
         <TouchableOpacity
           activeOpacity={0.7}
-          onPress={() => handleToggleRoof(item._id)}
+          // ÚPRAVA: Tady předáme celý item do naší funkce
+          onPress={() => handleToggleRoof(item)}
         >
           <LinearGradient
             colors={colors.gradients.surface}
@@ -70,6 +81,8 @@ export default function HistoryScreen() {
       </View>
     );
   };
+
+  // ... zbytek kódu s FlatListem zůstává stejný
 
   return (
     <LinearGradient

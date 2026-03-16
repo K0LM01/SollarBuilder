@@ -123,7 +123,7 @@ export const createHistoryStyles = (colors: ColorScheme) => {
       fontWeight: "bold",
       fontSize: 25,
       textAlign: "center",
-      color: "#FFFFFF",
+      color: colors.text,
       marginBottom: 8,
     },
     dimensionsRow: {
@@ -133,11 +133,11 @@ export const createHistoryStyles = (colors: ColorScheme) => {
     },
     dimensionLabel: {
       fontSize: 14,
-      color: "#A0A0A0",
+      color: colors.text,
     },
     dimensionValue: {
       fontWeight: "600",
-      color: "#FFFFFF",
+      color: colors.text,
     },
   });
   return styles;
