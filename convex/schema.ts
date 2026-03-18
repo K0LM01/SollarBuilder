@@ -16,6 +16,8 @@ export default defineSchema({
         y: v.number(),
       }),
     ),
+    ownerId: v.string(), // Kdo ten plánek vytvořil
+    sharedWith: v.optional(v.array(v.string())), // Pole ID uživatelů, kterým je to nasdílené
 
     obstacles: v.array(
       v.union(
@@ -67,22 +69,13 @@ export default defineSchema({
         // TYP 3: Hromosvod
         v.object({
           type: v.literal("lightning_rod"),
-          positionX: v.union(
-            v.object({ measuredFrom: v.literal("left"), distance: v.number() }),
-            v.object({
-              measuredFrom: v.literal("right"),
-              distance: v.number(),
-            }),
-          ),
-          positionY: v.union(
-            v.object({ measuredFrom: v.literal("top"), distance: v.number() }),
-            v.object({
-              measuredFrom: v.literal("bottom"),
-              distance: v.number(),
-            }),
+          edge: v.union(
+            v.literal("left"),
+            v.literal("right"),
+            v.literal("top"),
+            v.literal("bottom"),
           ),
           clearanceZone: v.number(),
-          note: v.optional(v.string()),
         }),
       ),
     ),

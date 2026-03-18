@@ -1,22 +1,22 @@
 {
   "expo": {
     "name": "SolarBuilder",
+    "icon": "./assets/images/icon.png",
     "slug": "SolarBuilder",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "solarbuilder",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
+    "androidNavigationBar": {
+      "visible": "immersive"
+    },
     "ios": {
       "supportsTablet": true
     },
     "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
+      "package": "com.k0lm.solarbuilder",
+      "icon": "./assets/images/icon.png",
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false
     },
@@ -37,11 +37,18 @@
             "backgroundColor": "#000000"
           }
         }
-      ]
+      ],
+      "expo-secure-store"
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "922da33d-123a-4724-b809-fab477ee5a5e"
+      }
     }
   }
 }

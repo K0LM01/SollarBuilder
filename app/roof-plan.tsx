@@ -1,24 +1,35 @@
+import { createRoofPlanStyles } from "@/assets/images/roofPlanStyles";
+import { DraggableObstacleWrapper } from "@/components/canvas/DraggableObstacleWrapper";
+import {
+  DraggablePanelGroup,
+  DraggablePanelGroupRef,
+} from "@/components/canvas/DraggablePanelGroup";
+import { GridBackground } from "@/components/canvas/GridBackground";
+import { ChimneyFormModal } from "@/components/modals/ChimneyFormModal";
+import { CustomMenu } from "@/components/modals/CustomMenu";
+import { LightningRodFormModal } from "@/components/modals/LightningRodFormModal";
+import { RoofWindowFormModal } from "@/components/modals/RoofWindowFormModal";
+import { SolarPanelFormModal } from "@/components/modals/SolarPanelFormModal";
 import useTheme from "@/hooks/useTheme";
+import { calculatePanelLayout } from "@/utils/solarMath";
+import AntDesign from "@expo/vector-icons/AntDesign";
+import EvilIcons from "@expo/vector-icons/EvilIcons";
+import FontAwesome from "@expo/vector-icons/FontAwesome";
+import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
+import Fontisto from "@expo/vector-icons/Fontisto";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import * as ScreenOrientation from "expo-screen-orientation";
+import { useEffect, useRef, useState } from "react";
+// PŘIDÁNO: Modal a TextInput pro sdílení
 import {
-  forwardRef,
-  useEffect,
-  useImperativeHandle,
-  useRef,
-  useState,
-} from "react";
-import {
+  Alert,
   Animated,
   Dimensions,
   Modal,
-  PanResponder,
   Pressable,
-  StyleSheet,
   Text,
   TextInput,
-  TouchableOpacity,
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
@@ -27,663 +38,11 @@ import { api } from "@/convex/_generated/api";
 import { useMutation, useQuery } from "convex/react";
 
 // ==========================================
-// 0. MATEMATIKA: Algoritmus pro panely
-// ==========================================
-const calculatePanelLayout = (
-  roofW: number,
-  roofH: number,
-  panelW: number,
-  panelH: number,
-  count: number,
-  preferredOrientation: string,
-) => {
-  const layouts = [];
-  let placedCount = 0;
-  const mainPW = preferredOrientation === "portrait" ? panelW : panelH;
-  const mainPH = preferredOrientation === "portrait" ? panelH : panelW;
-  const cols = Math.floor(roofW / mainPW);
-  const rows = Math.floor(roofH / mainPH);
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (placedCount >= count) return layouts;
-      layouts.push({
-        x: c * mainPW,
-        y: r * mainPH,
-        width: mainPW,
-        height: mainPH,
-        rotated: false,
-      });
-      placedCount++;
-    }
-  }
-
-  if (placedCount < count) {
-    const altPW = mainPH;
-    const altPH = mainPW;
-    const usedWidth = cols * mainPW;
-    const remainingWidth = roofW - usedWidth;
-    if (remainingWidth >= altPW) {
-      const altCols = Math.floor(remainingWidth / altPW);
-      const altRows = Math.floor(roofH / altPH);
-      for (let r = 0; r < altRows; r++) {
-        for (let c = 0; c < altCols; c++) {
-          if (placedCount >= count) return layouts;
-          layouts.push({
-            x: usedWidth + c * altPW,
-            y: r * altPH,
-            width: altPW,
-            height: altPH,
-            rotated: true,
-          });
-          placedCount++;
-        }
-      }
-    }
-    const usedHeight = rows * mainPH;
-    const remainingHeight = roofH - usedHeight;
-    if (remainingHeight >= altPH) {
-      const altCols = Math.floor(roofW / altPW);
-      const altRows = Math.floor(remainingHeight / altPH);
-      for (let r = 0; r < altRows; r++) {
-        for (let c = 0; c < altCols; c++) {
-          if (placedCount >= count) return layouts;
-          layouts.push({
-            x: c * altPW,
-            y: usedHeight + r * altPH,
-            width: altPW,
-            height: altPH,
-            rotated: true,
-          });
-          placedCount++;
-        }
-      }
-    }
-  }
-  return layouts;
-};
-
-// ==========================================
-// 1. MŘÍŽKA NA POZADÍ
-// ==========================================
-const GridBackground = ({ color }: { color: string }) => {
-  const lines = Array.from({ length: 100 });
-  const gridSize = 30;
-  return (
-    <View style={[StyleSheet.absoluteFill, { overflow: "hidden", zIndex: -1 }]}>
-      {lines.map((_, i) => (
-        <View
-          key={`h-${i}`}
-          style={{
-            position: "absolute",
-            top: i * gridSize,
-            width: "100%",
-            height: 1,
-            backgroundColor: color,
-          }}
-        />
-      ))}
-      {lines.map((_, i) => (
-        <View
-          key={`v-${i}`}
-          style={{
-            position: "absolute",
-            left: i * gridSize,
-            width: 1,
-            height: "100%",
-            backgroundColor: color,
-          }}
-        />
-      ))}
-    </View>
-  );
-};
-// ==========================================
-// 2. DRAGGABLE KOMPONENTA (S PERFEKTNÍ MATEMATIKOU A PŘISÁVÁNÍM)
-// ==========================================
-type DraggableProps = {
-  layout: any[];
-  scale: number;
-  roofWidthPx: number;
-  roofHeightPx: number;
-  realRoofWidth: number;
-  realRoofHeight: number;
-  initialPosition: { x: number; y: number };
-  onDragStart: () => void;
-  onDragMove: (x: number, y: number) => void;
-  onDragEnd: (x: number, y: number) => void;
-  onPositionChange: (x: number, y: number) => void;
-};
-export interface DraggablePanelGroupRef {
-  center: () => void;
-}
-
-const DraggablePanelGroup = forwardRef<DraggablePanelGroupRef, DraggableProps>(
-  (
-    {
-      layout,
-      scale,
-      roofWidthPx,
-      roofHeightPx,
-      realRoofWidth,
-      realRoofHeight,
-      initialPosition,
-      onDragStart,
-      onDragMove,
-      onDragEnd,
-      onPositionChange,
-    },
-    ref,
-  ) => {
-    const boundingWidth = Math.max(...layout.map((p) => p.x + p.width)) * scale;
-    const boundingHeight =
-      Math.max(...layout.map((p) => p.y + p.height)) * scale;
-
-    const maxAllowedX = Math.max(0, roofWidthPx - boundingWidth - 6);
-    const maxAllowedY = Math.max(0, roofHeightPx - boundingHeight - 6);
-
-    const startX = initialPosition
-      ? Math.min(initialPosition.x, maxAllowedX)
-      : 0;
-    const startY = initialPosition
-      ? Math.min(initialPosition.y, maxAllowedY)
-      : 0;
-
-    const pan = useRef(new Animated.ValueXY({ x: startX, y: startY })).current;
-    const currentPos = useRef({ x: startX, y: startY });
-    const [isDraggingLocal, setIsDraggingLocal] = useState(false);
-
-    // Čistá matematika (maximální pohyb v cm)
-    const realBoundW = Math.round(boundingWidth / scale);
-    const realBoundH = Math.round(boundingHeight / scale);
-    const maxMoveCmX = Math.max(0, realRoofWidth - realBoundW);
-    const maxMoveCmY = Math.max(0, realRoofHeight - realBoundH);
-
-    const callbacks = useRef({
-      onDragEnd,
-      onPositionChange,
-      onDragStart,
-      onDragMove,
-    });
-    useEffect(() => {
-      callbacks.current = {
-        onDragEnd,
-        onPositionChange,
-        onDragStart,
-        onDragMove,
-      };
-    }, [onDragEnd, onPositionChange, onDragStart, onDragMove]);
-
-    const [distances, setDistances] = useState({
-      left: 0,
-      top: 0,
-      right: 0,
-      bottom: 0,
-    });
-
-    useImperativeHandle(ref, () => ({
-      center: () => {
-        // Centrování s přihlédnutím k 5cm mřížce
-        let targetCmX = Math.round(maxMoveCmX / 2 / 5) * 5;
-        let targetCmY = Math.round(maxMoveCmY / 2 / 5) * 5;
-
-        let targetX =
-          maxMoveCmX > 0 ? (targetCmX / maxMoveCmX) * maxAllowedX : 0;
-        let targetY =
-          maxMoveCmY > 0 ? (targetCmY / maxMoveCmY) * maxAllowedY : 0;
-
-        setIsDraggingLocal(true);
-        Animated.spring(pan, {
-          toValue: { x: targetX, y: targetY },
-          useNativeDriver: false,
-          friction: 6,
-        }).start(() => {
-          currentPos.current = { x: targetX, y: targetY };
-          setTimeout(() => setIsDraggingLocal(false), 600);
-          callbacks.current.onPositionChange(targetX, targetY);
-        });
-      },
-    }));
-
-    // Kóty už se počítají procentuálně = absolutní přesnost na okrajích (0 cm!)
-    useEffect(() => {
-      const listenerId = pan.addListener((value) => {
-        let percentX =
-          maxAllowedX > 0 ? Math.max(0, Math.min(1, value.x / maxAllowedX)) : 0;
-        let percentY =
-          maxAllowedY > 0 ? Math.max(0, Math.min(1, value.y / maxAllowedY)) : 0;
-
-        let leftCm = Math.round(percentX * maxMoveCmX);
-        let topCm = Math.round(percentY * maxMoveCmY);
-
-        setDistances({
-          left: leftCm,
-          top: topCm,
-          right: Math.max(0, maxMoveCmX - leftCm),
-          bottom: Math.max(0, maxMoveCmY - topCm),
-        });
-      });
-      return () => pan.removeListener(listenerId);
-    }, [pan, maxAllowedX, maxAllowedY, maxMoveCmX, maxMoveCmY]);
-
-    const panResponder = useRef(
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: () => true,
-        onPanResponderGrant: () => {
-          setIsDraggingLocal(true);
-          pan.setOffset({ x: currentPos.current.x, y: currentPos.current.y });
-          pan.setValue({ x: 0, y: 0 });
-          callbacks.current.onDragStart();
-        },
-        onPanResponderMove: (e, gestureState) => {
-          let rawX = currentPos.current.x + gestureState.dx;
-          let rawY = currentPos.current.y + gestureState.dy;
-
-          // Krok 1: Kde jsme procentuálně na obrazovce?
-          let percentX = maxAllowedX > 0 ? rawX / maxAllowedX : 0;
-          let percentY = maxAllowedY > 0 ? rawY / maxAllowedY : 0;
-
-          // Krok 2: Jaká je to hodnota v reálných centimetrech?
-          let rawCmX = percentX * maxMoveCmX;
-          let rawCmY = percentY * maxMoveCmY;
-
-          // Krok 3: Přisajeme k nejbližším 5 cm
-          let snappedCmX = Math.round(rawCmX / 5) * 5;
-          let snappedCmY = Math.round(rawCmY / 5) * 5;
-
-          // Krok 4: Zabráníme přejetí okrajů
-          if (snappedCmX < 0) snappedCmX = 0;
-          if (snappedCmY < 0) snappedCmY = 0;
-          if (snappedCmX > maxMoveCmX) snappedCmX = maxMoveCmX;
-          if (snappedCmY > maxMoveCmY) snappedCmY = maxMoveCmY;
-
-          // Krok 5: Převedeme cm zpět na fyzické pixely pro animaci
-          let finalX =
-            maxMoveCmX > 0 ? (snappedCmX / maxMoveCmX) * maxAllowedX : 0;
-          let finalY =
-            maxMoveCmY > 0 ? (snappedCmY / maxMoveCmY) * maxAllowedY : 0;
-
-          pan.setValue({
-            x: finalX - currentPos.current.x,
-            y: finalY - currentPos.current.y,
-          });
-          callbacks.current.onDragMove(gestureState.moveX, gestureState.moveY);
-        },
-        onPanResponderRelease: () => {
-          setIsDraggingLocal(false);
-          pan.flattenOffset();
-          const finalX = (pan.x as any)._value;
-          const finalY = (pan.y as any)._value;
-          currentPos.current.x = finalX;
-          currentPos.current.y = finalY;
-          callbacks.current.onDragEnd(finalX, finalY);
-        },
-        onPanResponderTerminate: () => setIsDraggingLocal(false),
-      }),
-    ).current;
-
-    return (
-      <Animated.View
-        {...panResponder.panHandlers}
-        style={{
-          position: "absolute",
-          left: 0,
-          top: 0,
-          width: boundingWidth,
-          height: boundingHeight,
-          transform: [{ translateX: pan.x }, { translateY: pan.y }],
-          backgroundColor: "rgba(59, 130, 246, 0.15)",
-        }}
-      >
-        {layout.map((panel, index) => (
-          <View
-            key={index}
-            style={{
-              position: "absolute",
-              left: panel.x * scale,
-              top: panel.y * scale,
-              width: panel.width * scale,
-              height: panel.height * scale,
-              backgroundColor: "#1e3a8a",
-              borderWidth: 1,
-              borderColor: "#60a5fa",
-              borderRadius: 2,
-            }}
-          />
-        ))}
-        {isDraggingLocal && (
-          <>
-            <View
-              style={{
-                position: "absolute",
-                top: -32,
-                width: "100%",
-                alignItems: "center",
-              }}
-            >
-              <View style={styles.dimensionBadge}>
-                <Text style={styles.dimensionBadgeText}>
-                  {distances.top} cm
-                </Text>
-              </View>
-            </View>
-            <View
-              style={{
-                position: "absolute",
-                bottom: -32,
-                width: "100%",
-                alignItems: "center",
-              }}
-            >
-              <View style={styles.dimensionBadge}>
-                <Text style={styles.dimensionBadgeText}>
-                  {distances.bottom} cm
-                </Text>
-              </View>
-            </View>
-            <View
-              style={{
-                position: "absolute",
-                left: -55,
-                top: 0,
-                height: "100%",
-                justifyContent: "center",
-              }}
-            >
-              <View style={styles.dimensionBadge}>
-                <Text style={styles.dimensionBadgeText}>
-                  {distances.left} cm
-                </Text>
-              </View>
-            </View>
-            <View
-              style={{
-                position: "absolute",
-                right: -55,
-                top: 0,
-                height: "100%",
-                justifyContent: "center",
-              }}
-            >
-              <View style={styles.dimensionBadge}>
-                <Text style={styles.dimensionBadgeText}>
-                  {distances.right} cm
-                </Text>
-              </View>
-            </View>
-          </>
-        )}
-      </Animated.View>
-    );
-  },
-);
-
-// ==========================================
-// 3. VYSKAKOVACÍ MENU A FORMULÁŘE
-// ==========================================
-const CustomMenu = ({ visible, onClose, onSelect, colors }: any) => {
-  const menuItems = [
-    { id: 1, title: "☀️ Solar panels" },
-    { id: 2, title: "🧱 Chimney" },
-    { id: 3, title: "🏠 Skylight" },
-    { id: 4, title: "⚡ Lightning conductor" },
-  ];
-  return (
-    <Modal
-      visible={visible}
-      transparent={true}
-      animationType="fade"
-      onRequestClose={onClose}
-    >
-      <TouchableOpacity
-        style={styles.modalOverlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity activeOpacity={1}>
-          <View
-            style={[
-              styles.menuContainer,
-              {
-                backgroundColor: colors.bg,
-                borderColor: colors.headerBorderBottom,
-              },
-            ]}
-          >
-            <Text style={[styles.menuTitle, { color: colors.text }]}>
-              What to add?
-            </Text>
-            {menuItems.map((item, index) => (
-              <TouchableOpacity
-                key={item.id}
-                style={[
-                  styles.menuItem,
-                  index !== menuItems.length - 1 && {
-                    borderBottomColor: colors.headerBorderBottom,
-                    borderBottomWidth: 1,
-                  },
-                ]}
-                onPress={() => {
-                  onSelect(item);
-                  onClose();
-                }}
-              >
-                <Text
-                  style={{
-                    color: colors.text,
-                    fontSize: 16,
-                    fontWeight: "500",
-                  }}
-                >
-                  {item.title}
-                </Text>
-              </TouchableOpacity>
-            ))}
-            <TouchableOpacity
-              style={[styles.cancelButton, { backgroundColor: colors.primary }]}
-              onPress={onClose}
-            >
-              <Text
-                style={{
-                  color: "#fff",
-                  fontWeight: "bold",
-                  textAlign: "center",
-                  fontSize: 16,
-                }}
-              >
-                Cancel
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
-  );
-};
-
-const SolarPanelFormModal = ({ visible, onClose, onSave, colors }: any) => {
-  const [count, setCount] = useState("10");
-  const [panelWidth, setPanelWidth] = useState("113");
-  const [panelHeight, setPanelHeight] = useState("172");
-  const [orientation, setOrientation] = useState("portrait");
-  return (
-    <Modal
-      visible={visible}
-      transparent={true}
-      animationType="slide"
-      onRequestClose={onClose}
-    >
-      <TouchableOpacity
-        style={styles.modalOverlay}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        <TouchableOpacity
-          activeOpacity={1}
-          style={[
-            styles.menuContainer,
-            { backgroundColor: colors.bg, width: 350 },
-          ]}
-        >
-          <Text style={[styles.menuTitle, { color: colors.text }]}>
-            Panel Settings
-          </Text>
-          <TextInput
-            style={[
-              styles.input,
-              {
-                borderColor: colors.headerBorderBottom,
-                backgroundColor: colors.bg,
-                color: colors.text,
-              },
-            ]}
-            placeholder="Count"
-            keyboardType="numeric"
-            value={count}
-            onChangeText={setCount}
-          />
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  flex: 1,
-                  borderColor: colors.headerBorderBottom,
-                  backgroundColor: colors.bg,
-                  color: colors.text,
-                },
-              ]}
-              placeholder="Width"
-              keyboardType="numeric"
-              value={panelWidth}
-              onChangeText={setPanelWidth}
-            />
-            <TextInput
-              style={[
-                styles.input,
-                {
-                  flex: 1,
-                  borderColor: colors.headerBorderBottom,
-                  backgroundColor: colors.bg,
-                  color: colors.text,
-                },
-              ]}
-              placeholder="Height"
-              keyboardType="numeric"
-              value={panelHeight}
-              onChangeText={setPanelHeight}
-            />
-          </View>
-          <Text
-            style={{
-              color: colors.text,
-              marginTop: 10,
-              marginBottom: 8,
-              fontWeight: "600",
-            }}
-          >
-            Preferred orientation:
-          </Text>
-          <View style={{ flexDirection: "row", gap: 10, marginBottom: 20 }}>
-            <TouchableOpacity
-              style={[
-                styles.orientButton,
-                orientation === "portrait" && {
-                  backgroundColor: colors.primary,
-                  borderColor: colors.primary,
-                },
-              ]}
-              onPress={() => setOrientation("portrait")}
-            >
-              <Text
-                style={{
-                  color: orientation === "portrait" ? "#fff" : colors.text,
-                }}
-              >
-                Height ↕️
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.orientButton,
-                orientation === "landscape" && {
-                  backgroundColor: colors.primary,
-                  borderColor: colors.primary,
-                },
-              ]}
-              onPress={() => setOrientation("landscape")}
-            >
-              <Text
-                style={{
-                  color: orientation === "landscape" ? "#fff" : colors.text,
-                }}
-              >
-                Width ↔️
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View style={{ flexDirection: "row", gap: 10 }}>
-            <TouchableOpacity
-              style={[
-                styles.cancelButton,
-                {
-                  flex: 1,
-                  backgroundColor: colors.surface,
-                  borderWidth: 1,
-                  borderColor: colors.headerBorderBottom,
-                  marginTop: 0,
-                },
-              ]}
-              onPress={onClose}
-            >
-              <Text
-                style={{
-                  color: colors.text,
-                  fontWeight: "bold",
-                  textAlign: "center",
-                }}
-              >
-                Cancel
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                styles.cancelButton,
-                { flex: 1, backgroundColor: colors.primary, marginTop: 0 },
-              ]}
-              onPress={() => {
-                onSave({
-                  count: Number(count),
-                  width: Number(panelWidth),
-                  height: Number(panelHeight),
-                  orientation,
-                });
-                onClose();
-              }}
-            >
-              <Text
-                style={{
-                  color: "#fff",
-                  fontWeight: "bold",
-                  textAlign: "center",
-                }}
-              >
-                Draw
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </TouchableOpacity>
-      </TouchableOpacity>
-    </Modal>
-  );
-};
-
-// ==========================================
 // 4. HLAVNÍ OBRAZOVKA PLÁNKU
 // ==========================================
 export default function RoofPlanScreen() {
   const { colors } = useTheme();
+  const styles = createRoofPlanStyles(colors);
   const router = useRouter();
 
   const { id, name, width, height } = useLocalSearchParams();
@@ -693,17 +52,36 @@ export default function RoofPlanScreen() {
 
   const roofs = useQuery(api.solars.getSolars);
   const updatePanelsMutation = useMutation(api.solars.updatePanels);
+  const removeObstacleMutation = useMutation(api.solars.removeObstacle);
+  const addObstacleMutation = useMutation(api.solars.addObstacle);
+
+  // PŘIDÁNO: Mutace pro sdílení
+  const shareRoofMutation = useMutation(api.solars.shareRoof);
 
   const [boardSize, setBoardSize] = useState({ width: 0, height: 0 });
   const [isMenuVisible, setIsMenuVisible] = useState(false);
   const [isPanelFormVisible, setIsPanelFormVisible] = useState(false);
+  const [isLightningRodFormVisible, setIsLightningRodFormVisible] =
+    useState(false);
+
   const [isTrashActive, setIsTrashActive] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+
+  // STAV PRO EDIT MODE
+  const [isEditMode, setIsEditMode] = useState(false);
+
+  // PŘIDÁNO: Stavy pro sdílecí modál
+  const [isShareModalVisible, setIsShareModalVisible] = useState(false);
+  const [colleagueId, setColleagueId] = useState("");
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [panelGroup, setPanelGroup] = useState<any[] | null>(null);
   const [panelConfig, setPanelConfig] = useState<any>(null);
   const [savedPosition, setSavedPosition] = useState({ x: 0, y: 0 });
+  const [obstacles, setObstacles] = useState<any[]>([]);
+
+  const [isChimneyFormVisible, setIsChimneyFormVisible] = useState(false);
+  const [isRoofWindowFormVisible, setIsRoofWindowFormVisible] = useState(false);
 
   const trashActiveRef = useRef(false);
   const draggableGroupRef = useRef<DraggablePanelGroupRef>(null);
@@ -719,18 +97,21 @@ export default function RoofPlanScreen() {
   }, []);
 
   useEffect(() => {
-    if (roofs && !isLoaded && roofId) {
+    if (roofs && roofId) {
       const currentRoof = roofs.find((r: any) => r._id === roofId);
-      if (currentRoof && currentRoof.panelLayout) {
-        setPanelConfig(currentRoof.panelConfig);
-        setPanelGroup(currentRoof.panelLayout);
-        setSavedPosition(currentRoof.savedPosition || { x: 0, y: 0 });
+      if (currentRoof) {
+        setObstacles(currentRoof.obstacles || []);
+        if (!isLoaded) {
+          setPanelConfig(currentRoof.panelConfig || null);
+          setPanelGroup(currentRoof.panelLayout || null);
+          setSavedPosition(currentRoof.savedPosition || { x: 0, y: 0 });
+          setIsLoaded(true);
+        }
       }
-      setIsLoaded(true);
     } else if (roofs && !roofId) {
       setIsLoaded(true);
     }
-  }, [roofs, isLoaded, roofId]);
+  }, [roofs, roofId, isLoaded]);
 
   const savePlanToDatabase = (
     config: any,
@@ -743,7 +124,30 @@ export default function RoofPlanScreen() {
       panelConfig: config || undefined,
       panelLayout: layout || undefined,
       savedPosition: position,
-    }).catch((err) => console.error("DB CHYBA:", err));
+    }).catch((err) => console.error("DB ERROR:", err));
+  };
+
+  // PŘIDÁNO: Funkce pro sdílení střechy
+  const handleShareProject = async () => {
+    if (!colleagueId.trim()) {
+      Alert.alert("Error", "Please enter a valid User ID");
+      return;
+    }
+
+    try {
+      await shareRoofMutation({
+        roofId: roofId,
+        collaboratorEmail: "unknown@colleague.com", // Zatím natvrdo
+        collaboratorId: colleagueId.trim(),
+      });
+
+      Alert.alert("Success", "Project shared successfully!");
+      setIsShareModalVisible(false);
+      setColleagueId("");
+    } catch (error) {
+      console.error(error);
+      Alert.alert("Error", "Failed to share project. Are you the owner?");
+    }
   };
 
   const triggerStatsFadeOut = () => {
@@ -760,23 +164,158 @@ export default function RoofPlanScreen() {
 
   const handleSelectItem = (item: any) => {
     if (item.title.includes("Solar panels")) setIsPanelFormVisible(true);
+    if (item.title.includes("Lightning conductor"))
+      setIsLightningRodFormVisible(true);
+    if (item.title.includes("Chimney")) setIsChimneyFormVisible(true);
+    if (item.title.includes("Skylight")) setIsRoofWindowFormVisible(true);
+  };
+
+  const handleAddObstacle = (obstacleData: any) => {
+    setObstacles([...obstacles, obstacleData]);
+    if (roofId) {
+      addObstacleMutation({ roofId, newObstacle: obstacleData }).catch((err) =>
+        console.error("DB error", err),
+      );
+    }
+  };
+
+  const handleDeleteObstacle = (index: number) => {
+    setObstacles((prev) => prev.filter((_, i) => i !== index));
+
+    if (roofId) {
+      removeObstacleMutation({ roofId, obstacleIndex: index }).catch((err) =>
+        console.error("Error while deleting obstacle in DB", err),
+      );
+    }
   };
 
   const handleGeneratePanels = (panelData: any) => {
+    let availableWidth = realWidth;
+    let availableHeight = realHeight;
+
+    obstacles.forEach((obs) => {
+      if (obs.type === "lightning_rod") {
+        if (obs.edge === "left" || obs.edge === "right")
+          availableWidth -= obs.clearanceZone;
+        if (obs.edge === "top" || obs.edge === "bottom")
+          availableHeight -= obs.clearanceZone;
+      }
+    });
+
     const layout = calculatePanelLayout(
-      realWidth,
-      realHeight,
+      availableWidth,
+      availableHeight,
       panelData.width,
       panelData.height,
       panelData.count,
       panelData.orientation,
+      panelData.gap,
     );
+
     setPanelConfig(panelData);
     setPanelGroup(layout);
-    setSavedPosition({ x: 0, y: 0 });
 
-    savePlanToDatabase(panelData, layout, { x: 0, y: 0 });
+    let startX = 0;
+    let startY = 0;
+    obstacles.forEach((obs) => {
+      if (obs.type === "lightning_rod") {
+        if (obs.edge === "left") startX = obs.clearanceZone;
+        if (obs.edge === "top") startY = obs.clearanceZone;
+      }
+    });
+
+    setSavedPosition({ x: startX, y: startY });
+    savePlanToDatabase(panelData, layout, { x: startX, y: startY });
     triggerStatsFadeOut();
+  };
+
+  const handleAddSinglePanel = () => {
+    if (!panelGroup || panelGroup.length === 0 || !panelConfig) return;
+
+    const gap = panelConfig.gap || 2.5;
+    const sampleWidth = panelConfig.width;
+    const sampleHeight = panelConfig.height;
+
+    const boundingW = Math.max(...panelGroup.map((p) => p.x + p.width));
+    const boundingH = Math.max(...panelGroup.map((p) => p.y + p.height));
+
+    const slotW = sampleWidth + gap;
+    const slotH = sampleHeight + gap;
+
+    const cols = Math.max(1, Math.round(boundingW / slotW));
+    let rows = Math.max(1, Math.round(boundingH / slotH));
+
+    let newX = -1;
+    let newY = -1;
+
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const testX = c * slotW;
+        const testY = r * slotH;
+
+        const isOccupied = panelGroup.some(
+          (p) => Math.abs(p.x - testX) < 1 && Math.abs(p.y - testY) < 1,
+        );
+
+        if (!isOccupied) {
+          newX = testX;
+          newY = testY;
+          break;
+        }
+      }
+      if (newX !== -1) break;
+    }
+
+    if (newX === -1) {
+      newX = 0;
+      newY = rows * slotH;
+    }
+
+    const newBoundingW = Math.max(boundingW, newX + sampleWidth);
+    const newBoundingH = Math.max(boundingH, newY + sampleHeight);
+
+    let leftLimit = 0;
+    let rightLimit = 0;
+    let topLimit = 0;
+    let bottomLimit = 0;
+
+    obstacles.forEach((obs) => {
+      if (obs.type === "lightning_rod") {
+        if (obs.edge === "left")
+          leftLimit = Math.max(leftLimit, obs.clearanceZone);
+        if (obs.edge === "right")
+          rightLimit = Math.max(rightLimit, obs.clearanceZone);
+        if (obs.edge === "top")
+          topLimit = Math.max(topLimit, obs.clearanceZone);
+        if (obs.edge === "bottom")
+          bottomLimit = Math.max(bottomLimit, obs.clearanceZone);
+      }
+    });
+
+    const maxAllowedWidth = realWidth - leftLimit - rightLimit;
+    const maxAllowedHeight = realHeight - topLimit - bottomLimit;
+
+    if (newBoundingW > maxAllowedWidth || newBoundingH > maxAllowedHeight) {
+      alert("No more panels can fit on the roof!");
+      return;
+    }
+
+    const newPanel = {
+      x: newX,
+      y: newY,
+      width: sampleWidth,
+      height: sampleHeight,
+      rotated: panelGroup[0]?.rotated || false,
+      isActive: true,
+    };
+
+    const newGroup = [...panelGroup, newPanel];
+    const newConfig = { ...panelConfig, count: panelConfig.count + 1 };
+
+    setPanelGroup(newGroup);
+    setPanelConfig(newConfig);
+
+    savePlanToDatabase(newConfig, newGroup, savedPosition);
   };
 
   if (!isLoaded) {
@@ -789,7 +328,7 @@ export default function RoofPlanScreen() {
         ]}
       >
         <Text style={{ color: colors.text, fontWeight: "bold" }}>
-          Načítám z databáze...
+          Loading from database...
         </Text>
       </LinearGradient>
     );
@@ -825,7 +364,15 @@ export default function RoofPlanScreen() {
             { borderBottomColor: colors.headerBorderBottom },
           ]}
         >
-          <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+          {/* ŘÁDEK 1: ZPĚT + NÁZEV */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "flex-start",
+              marginBottom: 4,
+            }}
+          >
             <Pressable onPress={() => router.back()} style={styles.backButton}>
               <Text
                 style={{
@@ -838,37 +385,140 @@ export default function RoofPlanScreen() {
               </Text>
             </Pressable>
             <Text
-              style={[styles.title, { color: colors.text }]}
+              style={[styles.title, { color: colors.text, flexShrink: 1 }]}
               numberOfLines={1}
             >
               Blueprint: {name}
             </Text>
           </View>
-          <View style={{ flexDirection: "row", gap: 12 }}>
+
+          {/* ŘÁDEK 2: OVLÁDACÍ TLAČÍTKA */}
+          <View
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              gap: 8,
+            }}
+          >
+            {/* Share */}
+            <Pressable
+              onPress={() => setIsShareModalVisible(true)}
+              style={{
+                backgroundColor: colors.surface,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderRadius: 999,
+                borderWidth: 1,
+                borderColor: colors.headerBorderBottom,
+                flexDirection: "row",
+                alignItems: "center",
+              }}
+            >
+              <Text
+                style={{ color: "#3b82f6", fontWeight: "bold", marginRight: 4 }}
+              >
+                <FontAwesome
+                  name="handshake-o"
+                  size={15}
+                  color={colors.iconColor}
+                />
+              </Text>
+              <Text style={{ color: "#3b82f6", fontWeight: "bold" }}>
+                Share
+              </Text>
+            </Pressable>
+
+            {/* Edit / Move */}
             {panelGroup && panelGroup.length > 0 && (
+              <Pressable
+                onPress={() => setIsEditMode(!isEditMode)}
+                style={{
+                  backgroundColor: isEditMode ? colors.primary : colors.surface,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: isEditMode
+                    ? colors.primary
+                    : colors.headerBorderBottom,
+                }}
+              >
+                <Text
+                  style={{
+                    color: isEditMode ? "#fff" : colors.text,
+                    fontWeight: "bold",
+                  }}
+                >
+                  {isEditMode ? (
+                    <Text>
+                      <FontAwesome
+                        name="hand-stop-o"
+                        size={12}
+                        color={colors.iconColor}
+                      />{" "}
+                      Move
+                    </Text>
+                  ) : (
+                    <Text>
+                      <EvilIcons
+                        name="pencil"
+                        size={17}
+                        color={colors.iconColor}
+                      />{" "}
+                      Edit
+                    </Text>
+                  )}
+                </Text>
+              </Pressable>
+            )}
+
+            {/* Center */}
+            {panelGroup && panelGroup.length > 0 && !isEditMode && (
               <Pressable
                 onPress={() => draggableGroupRef.current?.center()}
                 style={{
                   backgroundColor: colors.surface,
-                  paddingHorizontal: 16,
-                  paddingVertical: 10,
-                  borderRadius: 12,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 999,
                   borderWidth: 1,
                   borderColor: colors.headerBorderBottom,
                 }}
               >
                 <Text style={{ color: colors.text, fontWeight: "bold" }}>
-                  ⌖ Center
+                  <AntDesign name="aim" size={12} color={colors.iconColor} />{" "}
+                  Center
                 </Text>
               </Pressable>
             )}
+
+            {/* +1 Panel */}
+            {panelGroup && panelGroup.length > 0 && !isEditMode && (
+              <Pressable
+                onPress={handleAddSinglePanel}
+                style={{
+                  backgroundColor: colors.surface,
+                  paddingHorizontal: 12,
+                  paddingVertical: 8,
+                  borderRadius: 999,
+                  borderWidth: 1,
+                  borderColor: colors.headerBorderBottom,
+                }}
+              >
+                <Text style={{ color: colors.primary, fontWeight: "bold" }}>
+                  +1 panel
+                </Text>
+              </Pressable>
+            )}
+
+            {/* + Add object */}
             <Pressable
               onPress={() => setIsMenuVisible(true)}
               style={{
                 backgroundColor: colors.primary,
-                paddingHorizontal: 16,
-                paddingVertical: 10,
-                borderRadius: 12,
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+                borderRadius: 999,
               }}
             >
               <Text style={{ color: "#fff", fontWeight: "bold" }}>
@@ -927,17 +577,360 @@ export default function RoofPlanScreen() {
                     {realWidth}cm
                   </Text>
 
+                  {obstacles.map((obs, index) => {
+                    if (obs.type === "lightning_rod") {
+                      const clearancePx = obs.clearanceZone * scale;
+
+                      let stylePosition: any = {};
+                      if (obs.edge === "left") {
+                        stylePosition = {
+                          top: 0,
+                          bottom: 0,
+                          left: 0,
+                          width: clearancePx,
+                        };
+                      } else if (obs.edge === "right") {
+                        stylePosition = {
+                          top: 0,
+                          bottom: 0,
+                          right: 0,
+                          width: clearancePx,
+                        };
+                      } else if (obs.edge === "top") {
+                        stylePosition = {
+                          left: 0,
+                          right: 0,
+                          top: 0,
+                          height: clearancePx,
+                        };
+                      } else if (obs.edge === "bottom") {
+                        stylePosition = {
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          height: clearancePx,
+                        };
+                      }
+
+                      return (
+                        <View
+                          key={`obs-${index}`}
+                          style={{
+                            position: "absolute",
+                            ...stylePosition,
+                            zIndex: 10,
+                          }}
+                        >
+                          <DraggableObstacleWrapper
+                            onDragStart={() => setIsDragging(true)}
+                            onDragMove={(pageX: number, pageY: number) => {
+                              const screenH = Dimensions.get("window").height;
+                              const screenW = Dimensions.get("window").width;
+                              if (
+                                pageY > screenH - 150 &&
+                                pageX > screenW - 150
+                              ) {
+                                setIsTrashActive(true);
+                                trashActiveRef.current = true;
+                              } else {
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                            onDragEnd={() => {
+                              setIsDragging(false);
+                              if (trashActiveRef.current === true) {
+                                handleDeleteObstacle(index);
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                backgroundColor: "rgba(239, 68, 68, 0.2)",
+                                borderColor: "rgba(239, 68, 68, 0.8)",
+                                borderWidth: 2,
+                                borderStyle: "dashed",
+                                justifyContent: "center",
+                                alignItems: "center",
+                              }}
+                            >
+                              <Text
+                                style={{
+                                  fontSize: 14,
+                                  color: "#ef4444",
+                                  fontWeight: "bold",
+                                  opacity: 0.5,
+                                  letterSpacing: 2,
+                                  transform: [
+                                    {
+                                      rotate:
+                                        obs.edge === "left" ||
+                                        obs.edge === "right"
+                                          ? "-90deg"
+                                          : "0deg",
+                                    },
+                                  ],
+                                }}
+                              >
+                                <AntDesign
+                                  name="thunderbolt"
+                                  size={24}
+                                  color={colors.inactive}
+                                />{" "}
+                                ZONE{" "}
+                                <AntDesign
+                                  name="thunderbolt"
+                                  size={24}
+                                  color={colors.inactive}
+                                />
+                              </Text>
+                            </View>
+                          </DraggableObstacleWrapper>
+                        </View>
+                      );
+                    }
+
+                    if (obs.type === "chimney") {
+                      const totalSizeCm = obs.size + obs.clearanceZone * 2;
+                      const sizePx = totalSizeCm * scale;
+
+                      let leftPx = 0;
+                      if (obs.positionX.measuredFrom === "left") {
+                        leftPx =
+                          (obs.positionX.distance - obs.clearanceZone) * scale;
+                      } else {
+                        leftPx =
+                          pixelWidth -
+                          (obs.positionX.distance +
+                            obs.size +
+                            obs.clearanceZone) *
+                            scale;
+                      }
+
+                      let topPx = 0;
+                      if (obs.positionY.measuredFrom === "top") {
+                        topPx =
+                          (obs.positionY.distance - obs.clearanceZone) * scale;
+                      } else {
+                        topPx =
+                          pixelHeight -
+                          (obs.positionY.distance +
+                            obs.size +
+                            obs.clearanceZone) *
+                            scale;
+                      }
+
+                      return (
+                        <View
+                          key={`obs-${index}`}
+                          style={{
+                            position: "absolute",
+                            left: leftPx,
+                            top: topPx,
+                            width: sizePx,
+                            height: sizePx,
+                            zIndex: 10,
+                          }}
+                        >
+                          <DraggableObstacleWrapper
+                            onDragStart={() => setIsDragging(true)}
+                            onDragMove={(pageX: number, pageY: number) => {
+                              const screenH = Dimensions.get("window").height;
+                              const screenW = Dimensions.get("window").width;
+                              if (
+                                pageY > screenH - 150 &&
+                                pageX > screenW - 150
+                              ) {
+                                setIsTrashActive(true);
+                                trashActiveRef.current = true;
+                              } else {
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                            onDragEnd={() => {
+                              setIsDragging(false);
+                              if (trashActiveRef.current === true) {
+                                handleDeleteObstacle(index);
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                backgroundColor: "rgba(239, 68, 68, 0.2)",
+                                borderColor: "rgba(239, 68, 68, 0.8)",
+                                borderWidth: 2,
+                                borderStyle: "dashed",
+                                justifyContent: "center",
+                                alignItems: "center",
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: obs.size * scale,
+                                  height: obs.size * scale,
+                                  backgroundColor: "#475569",
+                                  justifyContent: "center",
+                                  alignItems: "center",
+                                }}
+                              >
+                                <Text style={{ fontSize: 10, color: "white" }}>
+                                  <Fontisto
+                                    name="rectangle"
+                                    size={24}
+                                    color={colors.iconColor}
+                                  />
+                                </Text>
+                              </View>
+                            </View>
+                          </DraggableObstacleWrapper>
+                        </View>
+                      );
+                    }
+
+                    if (obs.type === "roof_window") {
+                      const totalWidthCm = obs.width + obs.clearanceZone * 2;
+                      const totalHeightCm = obs.height + obs.clearanceZone * 2;
+                      const widthPx = totalWidthCm * scale;
+                      const heightPx = totalHeightCm * scale;
+
+                      let leftPx = 0;
+                      if (obs.positionX.measuredFrom === "left") {
+                        leftPx =
+                          (obs.positionX.distance - obs.clearanceZone) * scale;
+                      } else {
+                        leftPx =
+                          pixelWidth -
+                          (obs.positionX.distance +
+                            obs.width +
+                            obs.clearanceZone) *
+                            scale;
+                      }
+
+                      let topPx = 0;
+                      if (obs.positionY.measuredFrom === "top") {
+                        topPx =
+                          (obs.positionY.distance - obs.clearanceZone) * scale;
+                      } else {
+                        topPx =
+                          pixelHeight -
+                          (obs.positionY.distance +
+                            obs.height +
+                            obs.clearanceZone) *
+                            scale;
+                      }
+
+                      return (
+                        <View
+                          key={`obs-${index}`}
+                          style={{
+                            position: "absolute",
+                            left: leftPx,
+                            top: topPx,
+                            width: widthPx,
+                            height: heightPx,
+                            zIndex: 10,
+                          }}
+                        >
+                          <DraggableObstacleWrapper
+                            onDragStart={() => setIsDragging(true)}
+                            onDragMove={(pageX: number, pageY: number) => {
+                              const screenH = Dimensions.get("window").height;
+                              const screenW = Dimensions.get("window").width;
+                              if (
+                                pageY > screenH - 150 &&
+                                pageX > screenW - 150
+                              ) {
+                                setIsTrashActive(true);
+                                trashActiveRef.current = true;
+                              } else {
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                            onDragEnd={() => {
+                              setIsDragging(false);
+                              if (trashActiveRef.current === true) {
+                                handleDeleteObstacle(index);
+                                setIsTrashActive(false);
+                                trashActiveRef.current = false;
+                              }
+                            }}
+                          >
+                            <View
+                              style={{
+                                width: "100%",
+                                height: "100%",
+                                backgroundColor: "rgba(59, 130, 246, 0.2)",
+                                borderColor: "rgba(59, 130, 246, 0.8)",
+                                borderWidth: 2,
+                                borderStyle: "dashed",
+                                justifyContent: "center",
+                                alignItems: "center",
+                              }}
+                            >
+                              <View
+                                style={{
+                                  width: obs.width * scale,
+                                  height: obs.height * scale,
+                                  backgroundColor: "#93c5fd",
+                                  justifyContent: "center",
+                                  alignItems: "center",
+                                  borderWidth: 1,
+                                  borderColor: "#3b82f6",
+                                }}
+                              >
+                                <Text style={{ fontSize: 10, color: "white" }}>
+                                  <FontAwesome5
+                                    name="solar-panel"
+                                    size={24}
+                                    color={colors.iconColor}
+                                  />
+                                </Text>
+                              </View>
+                            </View>
+                          </DraggableObstacleWrapper>
+                        </View>
+                      );
+                    }
+
+                    return null;
+                  })}
+
                   {panelGroup && panelGroup.length > 0 && (
                     <DraggablePanelGroup
                       ref={draggableGroupRef}
                       key={`panels-${panelGroup.length}-${savedPosition.x}-${savedPosition.y}`}
                       layout={panelGroup}
+                      isEditMode={isEditMode}
+                      onTogglePanel={(index) => {
+                        const newGroup = [...panelGroup];
+                        newGroup[index] = {
+                          ...newGroup[index],
+                          isActive: !newGroup[index].isActive,
+                        };
+                        setPanelGroup(newGroup);
+                        savePlanToDatabase(
+                          panelConfig,
+                          newGroup,
+                          savedPosition,
+                        );
+                      }}
                       scale={scale}
                       roofWidthPx={pixelWidth}
                       roofHeightPx={pixelHeight}
                       realRoofWidth={realWidth}
                       realRoofHeight={realHeight}
                       initialPosition={savedPosition}
+                      obstacles={obstacles}
                       onDragStart={() => setIsDragging(true)}
                       onDragMove={(pageX, pageY) => {
                         const screenHeight = Dimensions.get("window").height;
@@ -1000,13 +993,16 @@ export default function RoofPlanScreen() {
                     fontSize: 13,
                   }}
                 >
-                  ☀️ {panelGroup.length} / {panelConfig.count} panels on roof
+                  <AntDesign name="sun" size={24} color={colors.iconColor} />{" "}
+                  {panelGroup.filter((p) => p.isActive !== false).length} /{" "}
+                  {panelConfig.count} panels on roof
                 </Text>
               </Animated.View>
             )}
           </View>
         </View>
       </SafeAreaView>
+
       {isDragging && (
         <View
           style={{
@@ -1025,9 +1021,102 @@ export default function RoofPlanScreen() {
             elevation: 100,
           }}
         >
-          <Text style={{ fontSize: isTrashActive ? 32 : 24 }}>🗑️</Text>
+          <Text style={{ fontSize: isTrashActive ? 32 : 24 }}>
+            <FontAwesome5 name="trash-alt" size={24} color={colors.iconColor} />
+          </Text>
         </View>
       )}
+
+      {/* PŘIDÁNO: Sdílecí Modál */}
+      <Modal visible={isShareModalVisible} transparent animationType="fade">
+        <View
+          style={{
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            backgroundColor: "rgba(0,0,0,0.6)",
+          }}
+        >
+          <View
+            style={{
+              backgroundColor: colors.surface,
+              padding: 24,
+              borderRadius: 16,
+              width: "70%",
+              borderColor: colors.headerBorderBottom,
+              borderWidth: 1,
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 20,
+                fontWeight: "bold",
+                color: colors.text,
+                marginBottom: 8,
+              }}
+            >
+              Share project
+            </Text>
+            <Text
+              style={{
+                fontSize: 14,
+                color: colors.textMuted,
+                marginBottom: 20,
+              }}
+            >
+              Enter your colleague's Clerk ID to let them edit this roof plan
+              with you in real time.
+            </Text>
+
+            <TextInput
+              style={{
+                borderWidth: 1,
+                borderColor: colors.headerBorderBottom,
+                backgroundColor: colors.bg,
+                color: colors.text,
+                padding: 12,
+                marginBottom: 20,
+                borderRadius: 8,
+                fontSize: 16,
+              }}
+              placeholder="e.g. user_2bXyZ..."
+              placeholderTextColor={colors.textMuted}
+              value={colleagueId}
+              onChangeText={setColleagueId}
+            />
+
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "flex-end",
+                gap: 12,
+              }}
+            >
+              <Pressable
+                onPress={() => setIsShareModalVisible(false)}
+                style={{ paddingHorizontal: 16, paddingVertical: 10 }}
+              >
+                <Text style={{ color: colors.textMuted, fontWeight: "600" }}>
+                  Cancel
+                </Text>
+              </Pressable>
+
+              <Pressable
+                onPress={handleShareProject}
+                style={{
+                  backgroundColor: colors.primary,
+                  paddingHorizontal: 16,
+                  paddingVertical: 10,
+                  borderRadius: 8,
+                }}
+              >
+                <Text style={{ color: "white", fontWeight: "600" }}>Share</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       <CustomMenu
         visible={isMenuVisible}
         onClose={() => setIsMenuVisible(false)}
@@ -1040,128 +1129,24 @@ export default function RoofPlanScreen() {
         onSave={handleGeneratePanels}
         colors={colors}
       />
+      <LightningRodFormModal
+        visible={isLightningRodFormVisible}
+        onClose={() => setIsLightningRodFormVisible(false)}
+        onSave={handleAddObstacle}
+        colors={colors}
+      />
+      <ChimneyFormModal
+        visible={isChimneyFormVisible}
+        onClose={() => setIsChimneyFormVisible(false)}
+        onSave={handleAddObstacle}
+        colors={colors}
+      />
+      <RoofWindowFormModal
+        visible={isRoofWindowFormVisible}
+        onClose={() => setIsRoofWindowFormVisible(false)}
+        onSave={handleAddObstacle}
+        colors={colors}
+      />
     </LinearGradient>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1 },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-  },
-  backButton: { marginRight: 16, padding: 8, marginLeft: -8 },
-  title: { fontSize: 20, fontWeight: "bold" },
-  planContainer: { flex: 1, padding: 16 },
-  blueprintBoard: {
-    flex: 1,
-    borderRadius: 16,
-    borderWidth: 2,
-    overflow: "hidden",
-    position: "relative",
-  },
-  centerWrapper: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  roofRectangle: {
-    borderWidth: 3,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-    elevation: 6,
-  },
-  measurementText: {
-    position: "absolute",
-    fontSize: 14,
-    fontWeight: "bold",
-    backgroundColor: "rgba(0,0,0,0.5)",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-    overflow: "hidden",
-  },
-  measureHeight: { left: -65 },
-  measureWidth: { bottom: -25 },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  menuContainer: {
-    width: 320,
-    borderRadius: 24,
-    borderWidth: 1,
-    padding: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.3,
-    shadowRadius: 20,
-    elevation: 10,
-  },
-  menuTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 16,
-    textAlign: "center",
-  },
-  menuItem: { paddingVertical: 16, paddingHorizontal: 12 },
-  cancelButton: {
-    marginTop: 20,
-    paddingVertical: 14,
-    borderRadius: 16,
-    justifyContent: "center",
-  },
-  input: {
-    height: 50,
-    borderRadius: 12,
-    paddingHorizontal: 16,
-    borderWidth: 1,
-    marginBottom: 12,
-  },
-  orientButton: {
-    flex: 1,
-    height: 40,
-    borderWidth: 1,
-    borderColor: "#ccc",
-    borderRadius: 8,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  statsBadge: {
-    position: "absolute",
-    bottom: 16,
-    left: 16,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 12,
-    borderWidth: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  dimensionBadge: {
-    backgroundColor: "#f59e0b",
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 3,
-    elevation: 4,
-  },
-  dimensionBadgeText: { color: "#fff", fontSize: 12, fontWeight: "bold" },
-});
