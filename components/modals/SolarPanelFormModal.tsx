@@ -1,16 +1,15 @@
 import { createRoofPlanStyles } from "@/assets/images/roofPlanStyles";
-
 import React, { useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 export const SolarPanelFormModal = ({
@@ -34,9 +33,11 @@ export const SolarPanelFormModal = ({
       transparent={true}
       animationType="slide"
       onRequestClose={onClose}
+      statusBarTranslucent={true} // <-- PŘIDÁNO: Zabrání trhání/přepočítávání výšky obrazovky na Androidu
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        enabled={Platform.OS === "ios"} // <-- PŘIDÁNO: Vypne konflikt s nativní Android klávesnicí
         style={styles.modalOverlay}
       >
         <TouchableOpacity
@@ -48,7 +49,12 @@ export const SolarPanelFormModal = ({
         <View
           style={[
             styles.menuContainer,
-            { backgroundColor: colors.bg, width: 350, maxHeight: "90%" },
+            {
+              backgroundColor: colors.bg,
+              width: 350,
+              maxHeight: "90%",
+              paddingBottom: Platform.OS === "android" ? 20 : 0, // Lehké odsazení zdola pro lepší prostor na Androidu
+            },
           ]}
         >
           <ScrollView showsVerticalScrollIndicator={false} bounces={false}>

@@ -1,6 +1,7 @@
 {
   "cli": {
-    "version": ">= 12.5.0"
+    "version": ">= 12.5.0",
+    "appVersionSource": "local"
   },
   "build": {
     "development": {
@@ -12,7 +13,9 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_CONVEX_URL": "https://grand-mole-628.eu-west-1.convex.cloud"
+        "EXPO_PUBLIC_CONVEX_URL": "https://scrupulous-jay-515.eu-west-1.convex.cloud",
+        "EXPO_PUBLIC_CONVEX_SITE_URL": "https://scrupulous-jay-515.eu-west-1.convex.site",
+        "EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY": "pk_test_ZGl2ZXJzZS1waG9lbml4LTc3LmNsZXJrLmFjY291bnRzLmRldiQ"
       }
     },
     "production": {}

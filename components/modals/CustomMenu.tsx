@@ -18,6 +18,7 @@ export const CustomMenu = ({ visible, onClose, onSelect, colors }: any) => {
       transparent={true}
       animationType="fade"
       onRequestClose={onClose}
+      statusBarTranslucent={true} // <-- PŘIDÁNO: Zabrání chybnému přepočítávání výšky obrazovky na Androidu
     >
       <TouchableOpacity
         style={styles.modalOverlay}

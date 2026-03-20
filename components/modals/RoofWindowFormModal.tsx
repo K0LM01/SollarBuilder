@@ -2,15 +2,15 @@
 import { createRoofPlanStyles } from "@/assets/images/roofPlanStyles";
 import React, { useState } from "react";
 import {
-    KeyboardAvoidingView,
-    Modal,
-    Platform,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  KeyboardAvoidingView,
+  Modal,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from "react-native";
 
 export const RoofWindowFormModal = ({
@@ -37,9 +37,11 @@ export const RoofWindowFormModal = ({
       transparent={true}
       animationType="slide"
       onRequestClose={onClose}
+      statusBarTranslucent={true} // <-- PŘIDÁNO: Zabraňuje trhání modalu při zobrazení klávesnice
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        enabled={Platform.OS === "ios"} // <-- PŘIDÁNO: Vypíná AvoidingView na Androidu
         style={styles.modalOverlay}
       >
         <TouchableOpacity
@@ -50,7 +52,12 @@ export const RoofWindowFormModal = ({
         <View
           style={[
             styles.menuContainer,
-            { backgroundColor: colors.bg, width: 350, maxHeight: "90%" },
+            {
+              backgroundColor: colors.bg,
+              width: 350,
+              maxHeight: "90%",
+              paddingBottom: Platform.OS === "android" ? 20 : 0, // Lehké odsazení zdola pro lepší prostor
+            },
           ]}
         >
           <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
@@ -286,7 +293,11 @@ export const RoofWindowFormModal = ({
                     {
                       flex: 1,
                       backgroundColor:
-                        distanceX && distanceY && width && height
+                        distanceX &&
+                        distanceY &&
+                        width &&
+                        height &&
+                        clearanceZone
                           ? colors.primary
                           : colors.surface,
                       marginTop: 0,
@@ -322,7 +333,11 @@ export const RoofWindowFormModal = ({
                   <Text
                     style={{
                       color:
-                        distanceX && distanceY && width && height
+                        distanceX &&
+                        distanceY &&
+                        width &&
+                        height &&
+                        clearanceZone
                           ? "#fff"
                           : colors.textMuted,
                       fontWeight: "bold",

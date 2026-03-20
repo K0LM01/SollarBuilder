@@ -30,9 +30,11 @@ export const LightningRodFormModal = ({
       transparent={true}
       animationType="slide"
       onRequestClose={onClose}
+      statusBarTranslucent={true} // <-- PŘIDÁNO: Řeší problém s chvěním celého modalu
     >
       <KeyboardAvoidingView
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        behavior={Platform.OS === "ios" ? "padding" : undefined}
+        enabled={Platform.OS === "ios"} // <-- PŘIDÁNO: Omezí pletení React Native vs nativní Android klávesnice
         style={styles.modalOverlay}
       >
         <TouchableOpacity
@@ -43,7 +45,12 @@ export const LightningRodFormModal = ({
         <View
           style={[
             styles.menuContainer,
-            { backgroundColor: colors.bg, width: 350, maxHeight: "90%" },
+            {
+              backgroundColor: colors.bg,
+              width: 350,
+              maxHeight: "90%",
+              paddingBottom: Platform.OS === "android" ? 20 : 0, // Lehce odsadí menu na Androidu
+            },
           ]}
         >
           <ScrollView showsVerticalScrollIndicator={false} bounces={false}>
